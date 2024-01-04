@@ -125,7 +125,7 @@ class PendingDependencies final {
     // to never invalidate assumptions. E.g., maps for shared structs do not
     // have transitions or change the shape of their fields. See
     // DependentCode::DeoptimizeDependencyGroups for corresponding DCHECK.
-    if (object->InWritableSharedSpace() || object->InReadOnlySpace()) return;
+    if (InWritableSharedSpace(*object) || InReadOnlySpace(*object)) return;
     deps_.LookupOrInsert(object, HandleValueHash(object))->value |= group;
   }
 
@@ -464,8 +464,8 @@ class OwnConstantDataPropertyDependency final : public CompilationDependency {
     if (representation_.IsDouble()) {
       // Compare doubles by bit pattern.
       if (!IsHeapNumber(current_value) || !IsHeapNumber(used_value) ||
-          HeapNumber::cast(current_value)->value_as_bits(kRelaxedLoad) !=
-              HeapNumber::cast(used_value)->value_as_bits(kRelaxedLoad)) {
+          HeapNumber::cast(current_value)->value_as_bits() !=
+              HeapNumber::cast(used_value)->value_as_bits()) {
         TRACE_BROKER_MISSING(broker_,
                              "Constant Double property value changed in "
                                  << holder_.object() << " at FieldIndex "
@@ -1172,6 +1172,12 @@ bool CompilationDependencies::DependOnNoProfilingProtector() {
       broker_, broker_->isolate()->factory()->no_profiling_protector()));
 }
 
+bool CompilationDependencies::DependOnNoUndetectableObjectsProtector() {
+  return DependOnProtector(MakeRef(
+      broker_,
+      broker_->isolate()->factory()->no_undetectable_objects_protector()));
+}
+
 bool CompilationDependencies::DependOnArrayBufferDetachingProtector() {
   return DependOnProtector(MakeRef(
       broker_,
@@ -1403,7 +1409,6 @@ void CompilationDependencies::DependOnConsistentJSFunctionView(
 void CompilationDependencies::DependOnNoSlackTrackingChange(MapRef map) {
   if (map.construction_counter() == 0) return;
   RecordDependency(zone_->New<NoSlackTrackingChangeDependency>(map));
-  return;
 }
 
 SlackTrackingPrediction::SlackTrackingPrediction(MapRef initial_map,

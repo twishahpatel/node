@@ -27,7 +27,8 @@ namespace internal {
 
 TQ_OBJECT_CONSTRUCTORS_IMPL(FeedbackVector)
 OBJECT_CONSTRUCTORS_IMPL(FeedbackMetadata, HeapObject)
-OBJECT_CONSTRUCTORS_IMPL(ClosureFeedbackCellArray, FixedArray)
+OBJECT_CONSTRUCTORS_IMPL(ClosureFeedbackCellArray,
+                         ClosureFeedbackCellArray::Super)
 
 NEVER_READ_ONLY_SPACE_IMPL(FeedbackVector)
 NEVER_READ_ONLY_SPACE_IMPL(ClosureFeedbackCellArray)
@@ -96,14 +97,6 @@ int FeedbackMetadata::GetSlotSize(FeedbackSlotKind kind) {
   }
 }
 
-Handle<FeedbackCell> ClosureFeedbackCellArray::GetFeedbackCell(int index) {
-  return handle(FeedbackCell::cast(get(index)), GetIsolate());
-}
-
-Tagged<FeedbackCell> ClosureFeedbackCellArray::cell(int index) {
-  return FeedbackCell::cast(get(index));
-}
-
 bool FeedbackVector::is_empty() const { return length() == 0; }
 
 DEF_GETTER(FeedbackVector, metadata, Tagged<FeedbackMetadata>) {
@@ -121,6 +114,9 @@ RELAXED_INT32_ACCESSORS(FeedbackVector, invocation_count,
 void FeedbackVector::clear_invocation_count(RelaxedStoreTag tag) {
   set_invocation_count(0, tag);
 }
+
+UINT8_ACCESSORS(FeedbackVector, invocation_count_before_stable,
+                kInvocationCountBeforeStableOffset)
 
 int FeedbackVector::osr_urgency() const {
   return OsrUrgencyBits::decode(osr_state());
@@ -217,6 +213,14 @@ void FeedbackVector::set_log_next_execution(bool value) {
   set_flags(LogNextExecutionBit::update(flags(), value));
 }
 
+bool FeedbackVector::interrupt_budget_reset_by_ic_change() const {
+  return InterruptBudgetResetByIcChangeBit::decode(flags());
+}
+
+void FeedbackVector::set_interrupt_budget_reset_by_ic_change(bool value) {
+  set_flags(InterruptBudgetResetByIcChangeBit::update(flags(), value));
+}
+
 base::Optional<Tagged<Code>> FeedbackVector::GetOptimizedOsrCode(
     Isolate* isolate, FeedbackSlot slot) {
   MaybeObject maybe_code = Get(isolate, slot);
@@ -236,6 +240,9 @@ base::Optional<Tagged<Code>> FeedbackVector::GetOptimizedOsrCode(
 // Conversion from an integer index to either a slot or an ic slot.
 // static
 FeedbackSlot FeedbackVector::ToSlot(intptr_t index) {
+  if (index == static_cast<intptr_t>(FeedbackSlot::Invalid().ToInt())) {
+    return FeedbackSlot();
+  }
   DCHECK_LE(static_cast<uintptr_t>(index),
             static_cast<uintptr_t>(std::numeric_limits<int>::max()));
   return FeedbackSlot(static_cast<int>(index));
@@ -267,14 +274,15 @@ MaybeObject FeedbackVector::Get(PtrComprCageBase cage_base,
   return value;
 }
 
-Handle<FeedbackCell> FeedbackVector::GetClosureFeedbackCell(int index) const {
+Handle<FeedbackCell> FeedbackVector::GetClosureFeedbackCell(Isolate* isolate,
+                                                            int index) const {
   DCHECK_GE(index, 0);
-  return closure_feedback_cell_array()->GetFeedbackCell(index);
+  return handle(closure_feedback_cell_array()->get(index), isolate);
 }
 
 Tagged<FeedbackCell> FeedbackVector::closure_feedback_cell(int index) const {
   DCHECK_GE(index, 0);
-  return closure_feedback_cell_array()->cell(index);
+  return closure_feedback_cell_array()->get(index);
 }
 
 MaybeObject FeedbackVector::SynchronizedGet(FeedbackSlot slot) const {

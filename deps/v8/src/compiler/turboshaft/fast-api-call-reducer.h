@@ -8,9 +8,9 @@
 #include "include/v8-fast-api-calls.h"
 #include "src/compiler/fast-api-calls.h"
 #include "src/compiler/turboshaft/assembler.h"
+#include "src/compiler/turboshaft/copying-phase.h"
 #include "src/compiler/turboshaft/index.h"
 #include "src/compiler/turboshaft/operations.h"
-#include "src/compiler/turboshaft/optimization-phase.h"
 #include "src/compiler/turboshaft/phase.h"
 #include "src/compiler/turboshaft/representations.h"
 
@@ -274,8 +274,9 @@ class FastApiCallReducer : public Next {
             case CTypeInfo::Type::kSeqOneByteString: {
               // Check that the value is a HeapObject.
               GOTO_IF(__ ObjectIsSmi(argument), handle_error);
+              V<HeapObject> argument_obj = V<HeapObject>::Cast(argument);
 
-              V<Map> map = __ LoadMapField(argument);
+              V<Map> map = __ LoadMapField(argument_obj);
               V<Word32> instance_type = __ LoadInstanceTypeField(map);
 
               V<Word32> encoding = __ Word32BitwiseAnd(
@@ -284,11 +285,9 @@ class FastApiCallReducer : public Next {
                           handle_error);
 
               V<WordPtr> length_in_bytes = __ template LoadField<WordPtr>(
-                  V<HeapObject>::Cast(argument),
-                  AccessBuilder::ForStringLength());
-              OpIndex data_ptr = __ WordPtrAdd(
-                  __ BitcastTaggedToWord(argument),
-                  (SeqOneByteString::kHeaderSize - kHeapObjectTag));
+                  argument_obj, AccessBuilder::ForStringLength());
+              V<WordPtr> data_ptr = __ GetElementStartPointer(
+                  argument_obj, AccessBuilder::ForSeqOneByteStringCharacter());
 
               constexpr int kAlign = alignof(FastOneByteString);
               constexpr int kSize = sizeof(FastOneByteString);

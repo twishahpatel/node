@@ -24,8 +24,10 @@ extern runtime WasmFunctionTableSet(
 extern runtime ThrowRangeError(Context, Smi): never;
 extern runtime ThrowWasmError(Context, Smi): never;
 extern runtime WasmThrowRangeError(Context, Smi): never;
+extern runtime TrapHandlerThrowWasmError(Context): never;
 extern runtime WasmThrowTypeError(Context, Smi, JSAny): never;
-extern runtime WasmThrowTypeErrorTwoArgs(Context, Smi, JSAny, JSAny): never;
+extern runtime WasmThrowDataViewTypeError(Context, Smi, JSAny): never;
+extern runtime WasmThrowDataViewDetachedError(Context, Smi): never;
 extern runtime WasmThrow(Context, Object, FixedArray): JSAny;
 extern runtime WasmReThrow(Context, Object): JSAny;
 extern runtime WasmTriggerTierUp(Context, WasmInstanceObject): JSAny;
@@ -34,8 +36,6 @@ extern runtime ThrowWasmStackOverflow(Context): JSAny;
 extern runtime WasmTraceMemory(Context, Smi): JSAny;
 extern runtime WasmTraceEnter(Context): JSAny;
 extern runtime WasmTraceExit(Context, Smi): JSAny;
-extern runtime WasmAtomicNotify(
-    Context, WasmInstanceObject, Smi, Number, Number): Smi;
 extern runtime WasmI32AtomicWait(
     Context, WasmInstanceObject, Smi, Number, Number, BigInt): Smi;
 extern runtime WasmI64AtomicWait(
@@ -518,15 +518,6 @@ builtin UintPtr53ToNumber(value: uintptr): Number {
 extern builtin I64ToBigInt(intptr): BigInt;
 extern builtin I32PairToBigInt(/*low*/ intptr, /*high*/ intptr): BigInt;
 
-builtin WasmAtomicNotify(memoryIndex: int32, offset: uintptr, count: uint32):
-    uint32 {
-  const instance: WasmInstanceObject = LoadInstanceFromFrame();
-  const result: Smi = runtime::WasmAtomicNotify(
-      LoadContextFromInstance(instance), instance, SmiFromInt32(memoryIndex),
-      UintPtr53ToNumber(offset), WasmUint32ToNumber(count));
-  return Unsigned(SmiToInt32(result));
-}
-
 builtin WasmI32AtomicWait(
     memIndex: int32, offset: uintptr, expectedValue: int32,
     timeout: BigInt): uint32 {
@@ -549,22 +540,8 @@ builtin WasmI64AtomicWait(
 
 // Type feedback collection support for `call_ref`.
 
-extern macro LoadCodeInstructionStart(Code): RawPtr;
-
-struct TargetAndInstance {
-  target: RawPtr;
-  instance: HeapObject;  // WasmInstanceObject or WasmApiFunctionRef
-}
-
-macro GetTargetAndInstance(funcref: WasmInternalFunction):
-    TargetAndInstance {
-  const ref = funcref.ref;
-  let target = funcref.call_target_ptr;
-  if (Signed(target) == IntPtrConstant(0)) {
-    target = LoadCodeInstructionStart(funcref.code);
-  }
-  return TargetAndInstance{target: target, instance: ref};
-}
+extern macro LoadWasmInternalFunctionInstructionStart(WasmInternalFunction):
+    RawPtr;
 
 // Vector format:
 // Two slots per call_ref instruction. These slots' values can be:
@@ -578,15 +555,14 @@ macro GetTargetAndInstance(funcref: WasmInternalFunction):
 //
 // TODO(rstz): The counter might overflow if it exceeds the range of a Smi.
 // This can lead to incorrect inlining decisions.
-builtin CallRefIC(
-    vector: FixedArray, index: intptr,
-    funcref: WasmInternalFunction): TargetAndInstance {
+macro UpdateIC(
+    vector: FixedArray, index: intptr, funcref: WasmInternalFunction): void {
   const value = vector.objects[index];
   if (value == funcref) {
     // Monomorphic hit. Check for this case first to maximize its performance.
     const count = UnsafeCast<Smi>(vector.objects[index + 1]) + SmiConstant(1);
     vector.objects[index + 1] = count;
-    return GetTargetAndInstance(funcref);
+    return;
   }
   // Check for polymorphic hit; its performance is second-most-important.
   if (Is<FixedArray>(value)) {
@@ -596,13 +572,11 @@ builtin CallRefIC(
         // Polymorphic hit.
         const count = UnsafeCast<Smi>(entries.objects[i + 1]) + SmiConstant(1);
         entries.objects[i + 1] = count;
-        return GetTargetAndInstance(funcref);
+        return;
       }
     }
   }
-  // All other cases are some sort of miss and must compute the target/
-  // instance. They all fall through to returning the computed data.
-  const result = GetTargetAndInstance(funcref);
+  // All other cases are some sort of miss.
   if (TaggedEqual(value, SmiConstant(0))) {
     // Was uninitialized.
     vector.objects[index] = funcref;
@@ -638,9 +612,29 @@ builtin CallRefIC(
     // Clear the first entry's counter; the specific value we write doesn't
     // matter.
     vector.objects[index + 1] = Undefined;
+  } else {
+    // The "ic::IsMegamorphic(value)" case doesn't need to do anything.
+    dcheck(value == ic::kMegamorphicSymbol);
   }
-  // The "ic::IsMegamorphic(value)" case doesn't need to do anything.
-  return result;
+}
+
+// This is the return type of "CallRefIC". The type is not used anywhere else;
+// Liftoff uses the two returned values directly.
+struct TargetAndRef {
+  target: RawPtr;
+  ref: WasmInstanceObject|WasmApiFunctionRef;
+}
+
+builtin CallRefIC(
+    vector: FixedArray, index: intptr,
+    funcref: WasmInternalFunction): TargetAndRef {
+  UpdateIC(vector, index, funcref);
+
+  let target = funcref.call_target_ptr;
+  if (Signed(target) == IntPtrConstant(0)) {
+    target = LoadWasmInternalFunctionInstructionStart(funcref);
+  }
+  return TargetAndRef{target: target, ref: funcref.ref};
 }
 
 extern macro TryHasOwnProperty(HeapObject, Map, InstanceType, Name): never
@@ -680,6 +674,10 @@ builtin WasmTrap(error: Smi): JSAny {
 
 builtin ThrowWasmTrapUnreachable(): JSAny {
   tail WasmTrap(SmiConstant(MessageTemplate::kWasmTrapUnreachable));
+}
+
+builtin WasmTrapHandlerThrowTrap(): JSAny {
+  tail runtime::TrapHandlerThrowWasmError(LoadContextFromWasmOrJsFrame());
 }
 
 builtin ThrowWasmTrapMemOutOfBounds(): JSAny {
@@ -745,39 +743,6 @@ builtin ThrowWasmTrapArrayTooLarge(): JSAny {
 
 builtin ThrowWasmTrapStringOffsetOutOfBounds(): JSAny {
   tail WasmTrap(SmiConstant(MessageTemplate::kWasmTrapStringOffsetOutOfBounds));
-}
-
-macro WasmTypeInfo(map: Map): WasmTypeInfo {
-  return UnsafeCast<WasmTypeInfo>(
-      map.constructor_or_back_pointer_or_native_context);
-}
-
-const kWasmI16ValueType: constexpr int32
-    generates 'wasm::ValueType::Primitive(wasm::kI16).raw_bit_field()';
-const kWasmI8ValueType: constexpr int32
-    generates 'wasm::ValueType::Primitive(wasm::kI8).raw_bit_field()';
-
-const kWasmArrayTypeRepOffset:
-    constexpr intptr generates 'wasm::ArrayType::kRepOffset';
-const kWasmValueTypeBitFieldOffset:
-    constexpr intptr generates 'wasm::ValueType::kBitFieldOffset';
-
-macro IsWord16WasmArrayMap(map: Map): bool {
-  const arrayTypePtr: RawPtr<int32> = %RawDownCast<RawPtr<int32>>(
-      WasmTypeInfo(map).native_type_ptr + kWasmArrayTypeRepOffset +
-      kWasmValueTypeBitFieldOffset);
-  const arrayTypeRef: &int32 =
-      torque_internal::unsafe::NewOffHeapReference(arrayTypePtr);
-  return *arrayTypeRef == kWasmI16ValueType;
-}
-
-macro IsWord8WasmArrayMap(map: Map): bool {
-  const arrayTypePtr: RawPtr<int32> = %RawDownCast<RawPtr<int32>>(
-      WasmTypeInfo(map).native_type_ptr + kWasmArrayTypeRepOffset +
-      kWasmValueTypeBitFieldOffset);
-  const arrayTypeRef: &int32 =
-      torque_internal::unsafe::NewOffHeapReference(arrayTypePtr);
-  return *arrayTypeRef == kWasmI8ValueType;
 }
 
 macro GetRefAt<T: type, From: type>(base: From, offset: intptr): &T {
@@ -1084,24 +1049,22 @@ builtin ThrowIndexOfCalledOnNull(): JSAny {
   runtime::WasmThrowTypeError(context, SmiConstant(error), name);
 }
 
-builtin ThrowDataViewGetInt32DetachedError(): JSAny {
+builtin ThrowDataViewTypeError(value: JSAny): JSAny {
   const context = LoadContextFromFrame();
-  const error = MessageTemplate::kDetachedOperation;
-  const name = StringConstant('DataView.prototype.getInt32');
-  runtime::WasmThrowTypeError(context, SmiConstant(error), name);
+  const error = MessageTemplate::kIncompatibleMethodReceiver;
+  runtime::WasmThrowDataViewTypeError(context, SmiConstant(error), value);
 }
 
-builtin ThrowDataViewGetInt32OutOfBounds(): JSAny {
+builtin ThrowDataViewDetachedError(): JSAny {
+  const context = LoadContextFromFrame();
+  const error = MessageTemplate::kDetachedOperation;
+  runtime::WasmThrowDataViewDetachedError(context, SmiConstant(error));
+}
+
+builtin ThrowDataViewOutOfBounds(): JSAny {
   const context = LoadContextFromFrame();
   const error = MessageTemplate::kInvalidDataViewAccessorOffset;
   runtime::WasmThrowRangeError(context, SmiConstant(error));
-}
-
-builtin ThrowDataViewGetInt32TypeError(value: JSAny): JSAny {
-  const context = LoadContextFromFrame();
-  const error = MessageTemplate::kIncompatibleMethodReceiver;
-  const name = StringConstant('DataView.prototype.getInt32');
-  runtime::WasmThrowTypeErrorTwoArgs(context, SmiConstant(error), name, value);
 }
 
 builtin WasmStringConcat(a: String, b: String): String {
@@ -1445,7 +1408,7 @@ builtin WasmStringHash(string: String): int32 {
   return SmiToInt32(result);
 }
 
-builtin WasmExternInternalize(externObject: JSAny): JSAny {
+builtin WasmAnyConvertExtern(externObject: JSAny): JSAny {
   const instance = LoadInstanceFromFrame();
   const context = LoadContextFromInstance(instance);
 

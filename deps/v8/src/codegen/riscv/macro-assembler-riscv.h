@@ -225,6 +225,8 @@ class V8_EXPORT_PRIVATE MacroAssembler : public MacroAssemblerBase {
   void LoadFromConstantsTable(Register destination, int constant_index) final;
   void LoadRootRegisterOffset(Register destination, intptr_t offset) final;
   void LoadRootRelative(Register destination, int32_t offset) final;
+  void StoreRootRelative(int32_t offset, Register value) final;
+
   // Operand pointing to an external reference.
   // May emit code to set up the scratch register. The operand is
   // only guaranteed to be correct as long as the scratch register
@@ -324,6 +326,8 @@ class V8_EXPORT_PRIVATE MacroAssembler : public MacroAssemblerBase {
   void CallBuiltinByIndex(Register builtin_index, Register target);
   void CallBuiltin(Builtin builtin);
   void TailCallBuiltin(Builtin builtin);
+  void TailCallBuiltin(Builtin builtin, Condition cond, Register type,
+                       Operand range);
 
   // Generates an instruction sequence s.t. the return address points to the
   // instruction following the call.
@@ -1082,11 +1086,20 @@ class V8_EXPORT_PRIVATE MacroAssembler : public MacroAssemblerBase {
   void JumpIfSmi(Register value, Label* smi_label,
                  Label::Distance distance = Label::kFar);
 
+  // AssembleArchBinarySearchSwitchRange Use JumpIfEqual and JumpIfLessThan.
+  // In V8_COMPRESS_POINTERS, the compare is done with the lower 32 bits of the
+  // input.
   void JumpIfEqual(Register a, int32_t b, Label* dest) {
+#ifdef V8_COMPRESS_POINTERS
+    Sll32(a, a, 0);
+#endif
     Branch(dest, eq, a, Operand(b));
   }
 
   void JumpIfLessThan(Register a, int32_t b, Label* dest) {
+#ifdef V8_COMPRESS_POINTERS
+    Sll32(a, a, 0);
+#endif
     Branch(dest, lt, a, Operand(b));
   }
 

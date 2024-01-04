@@ -272,7 +272,7 @@ void TestingModuleBuilder::AddIndirectFunctionTable(
       int sig_id =
           test_module_->isorecursive_canonical_type_ids[function.sig_index];
       FunctionTargetAndRef entry(instance, function.func_index);
-      instance->GetIndirectFunctionTable(isolate_, table_index)
+      instance->indirect_function_table(table_index)
           ->Set(i, sig_id, entry.call_target(), *entry.ref());
       WasmTableObject::SetFunctionTablePlaceholder(
           isolate_, table_obj, i, instance_object_, function_indexes[i]);
@@ -356,15 +356,13 @@ uint32_t TestingModuleBuilder::AddPassiveDataSegment(
   uint32_t size = static_cast<uint32_t>(data_segment_sizes_.size());
   Handle<FixedAddressArray> data_segment_starts =
       FixedAddressArray::New(isolate_, size);
-  data_segment_starts->copy_in(
-      0, reinterpret_cast<uint8_t*>(data_segment_starts_.data()),
-      size * sizeof(Address));
+  MemCopy(data_segment_starts->begin(), data_segment_starts_.data(),
+          size * sizeof(Address));
   instance_object_->set_data_segment_starts(*data_segment_starts);
   Handle<FixedUInt32Array> data_segment_sizes =
       FixedUInt32Array::New(isolate_, size);
-  data_segment_sizes->copy_in(
-      0, reinterpret_cast<uint8_t*>(data_segment_sizes_.data()),
-      size * sizeof(uint32_t));
+  MemCopy(data_segment_sizes->begin(), data_segment_sizes_.data(),
+          size * sizeof(uint32_t));
   instance_object_->set_data_segment_sizes(*data_segment_sizes);
   return index;
 }
@@ -437,8 +435,10 @@ void TestBuildingGraph(Zone* zone, compiler::JSGraph* jsgraph,
                        CompilationEnv* env, const FunctionSig* sig,
                        compiler::SourcePositionTable* source_position_table,
                        const uint8_t* start, const uint8_t* end) {
-  compiler::WasmGraphBuilder builder(env, zone, jsgraph, sig,
-                                     source_position_table);
+  compiler::WasmGraphBuilder builder(
+      env, zone, jsgraph, sig, source_position_table,
+      compiler::WasmGraphBuilder::kInstanceParameterMode, nullptr /* isolate */,
+      env->enabled_features);
   TestBuildingGraphWithBuilder(&builder, zone, sig, start, end);
 }
 
@@ -482,8 +482,9 @@ void WasmFunctionCompiler::Build(base::Vector<const uint8_t> bytes) {
   WasmFeatures unused_detected_features;
   // Validate Wasm modules; asm.js is assumed to be always valid.
   if (env.module->origin == kWasmOrigin) {
-    DecodeResult validation_result = ValidateFunctionBody(
-        env.enabled_features, env.module, &unused_detected_features, func_body);
+    DecodeResult validation_result =
+        ValidateFunctionBody(zone_, env.enabled_features, env.module,
+                             &unused_detected_features, func_body);
     if (validation_result.failed()) {
       FATAL("Validation failed: %s",
             validation_result.error().message().c_str());

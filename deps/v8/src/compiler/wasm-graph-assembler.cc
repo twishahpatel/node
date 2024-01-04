@@ -5,6 +5,7 @@
 #include "src/compiler/wasm-graph-assembler.h"
 
 #include "src/common/globals.h"
+#include "src/compiler/access-builder.h"
 #include "src/compiler/diamond.h"
 #include "src/compiler/node-matchers.h"
 #include "src/compiler/wasm-compiler-definitions.h"
@@ -440,13 +441,13 @@ Node* WasmGraphAssembler::AssertNotNull(Node* object, wasm::ValueType type,
                                   object, effect(), control()));
 }
 
-Node* WasmGraphAssembler::WasmExternInternalize(Node* object) {
-  return AddNode(graph()->NewNode(simplified_.WasmExternInternalize(), object,
+Node* WasmGraphAssembler::WasmAnyConvertExtern(Node* object) {
+  return AddNode(graph()->NewNode(simplified_.WasmAnyConvertExtern(), object,
                                   effect(), control()));
 }
 
-Node* WasmGraphAssembler::WasmExternExternalize(Node* object) {
-  return AddNode(graph()->NewNode(simplified_.WasmExternExternalize(), object,
+Node* WasmGraphAssembler::WasmExternConvertAny(Node* object) {
+  return AddNode(graph()->NewNode(simplified_.WasmExternConvertAny(), object,
                                   effect(), control()));
 }
 
@@ -492,7 +493,7 @@ void WasmGraphAssembler::ArrayInitializeLength(Node* array, Node* length) {
 Node* WasmGraphAssembler::LoadStringLength(Node* string) {
   return LoadImmutableFromObject(
       MachineType::Int32(), string,
-      wasm::ObjectAccess::ToTagged(String::kLengthOffset));
+      wasm::ObjectAccess::ToTagged(AccessBuilder::ForStringLength().offset));
 }
 
 Node* WasmGraphAssembler::StringAsWtf16(Node* string) {
